@@ -1,1 +1,14 @@
+# Config files with secrets (legacy)
 config.js
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Editor directories
+.vscode/
+.idea/
+
+# Packed extension
+*.zip
+*.crx

@@ -19,12 +19,6 @@ async function waitForElement(getElement, identifier) {
     });
 }
 
-function getDate() {
-    const date = new Date();
-    return date.toISOString().split('T')[0];
-}
-
-
 function showToast(message, color, duration = 3000) {
     if (!document.getElementById('toast-style')) {
       const style = document.createElement('style');
@@ -69,119 +63,6 @@ function showToast(message, color, duration = 3000) {
       toast.classList.remove('show');
       setTimeout(() => toast.remove(), 300);
     }, duration);
-}
-
-
-async function findExistingFile(dataToFind, pathName) {
-    const response = await fetch(
-        `https://api.github.com/repos/${config.github.username}/${config.github.repo_name}/contents/${pathName}`, dataToFind
-    );
-    const data = await response.json();
-    return {
-        "response": data,
-        "status": response.status
-    };
-}
-
-async function uploadToGitHub(pathName, dataToAdd) {
-    const response = await fetch(
-        `https://api.github.com/repos/${config.github.username}/${config.github.repo_name}/contents/${pathName}`,
-        {
-            method: 'PUT',
-            headers: {
-                'Authorization': `Bearer ${config.github.token}`,
-                'X-GitHub-Api-Version': '2022-11-28'
-            },
-            body: JSON.stringify(dataToAdd)
-        }
-    );
-    const data = await response.json();
-    const status = response.status;
-    return {
-        "response": data,
-        "status": status
-    };
-}
-
-
-function getLanguage(language) {
-    if (language === "Python") {
-        return "py";
-    } else if (language === "Java") {
-        return "java";
-    } else if (language === "C++") {
-        return "cpp";
-    } else if (language === "C#") {
-        return "c";
-    } else if (language === "JavaScript") {
-        return "js";
-    }
-    return "py";
-}
-
-async function addContentToGitHub(code, questionTitle, questionContent, language) {
-    const title = questionTitle.replaceAll(' ', '-').toLowerCase().trim();
-    const solutionAdded = await addToGithub(code, title, "solution", getLanguage(language));
-    const problemAdded = await addToGithub(questionContent, title, "problem", "md");
-
-    if (solutionAdded.status !== 201 && solutionAdded.status !== 200) {
-        return solutionAdded;
-    }
-
-    if (problemAdded.status !== 201 && problemAdded.status !== 200) {
-        return problemAdded;
-    }
-
-    return problemAdded;
-}
-
-async function addToGithub(content, title, contentType, fileType) {
-    try {
-        const date = getDate();
-        const pathName = `${date}/${title}/${contentType}.${fileType}`;
-        const dataToAdd = {
-            owner: config.github.username,
-            repo: config.github.repo_name,
-            path: 'PATH',
-            message: `Added ${title} on ${date}`,
-            committer: {
-                name: config.github.committer_name,
-                email: config.github.committer_email
-            },
-            content: btoa(String.fromCharCode(...new TextEncoder().encode(content)))
-        }
-        const dataToFind = {
-            owner: config.github.username,
-            repo: config.github.repo_name,
-            path: 'PATH',
-            headers: {
-                'Authorization': `Bearer ${config.github.token}`,
-                'X-GitHub-Api-Version': '2022-11-28'
-            }
-        }   
-        const existingFile = await findExistingFile(dataToFind, pathName);
-        if (existingFile.status === 200) {
-            dataToAdd.sha = existingFile.response.sha;
-            const data = await uploadToGitHub(pathName, dataToAdd);
-            return {
-                "response": data,
-                "status": data.status,
-                "updated": true
-            }
-        } else {
-            const data = await uploadToGitHub(pathName, dataToAdd);
-            return {
-                "response": data,
-                "status": data.status,
-                "message": "File does not exist"
-            };
-        }
-    } catch (error) {
-        return {
-            "response": error,
-            "status": 500
-        };
-    }
 }
 
 function formatArticleComponent(title, articleComponent) {
@@ -295,23 +176,35 @@ function formatArticleComponent(title, articleComponent) {
 }
 
 chrome.runtime.onMessage.addListener(async (message, sender, sendResponse) => {
-    if (message.type === 'CODE_DATA' && message.code && message.title) {
+    // Handle request from background to get DOM data
+    if (message.type === 'GET_DOM_DATA' && message.code && message.title) {
         try {
             const questionTitle = await waitForElement('querySelector', 'h1');
             const articleComponent = await waitForElement('querySelector', 'div.my-article-component-container');
             const markdownContent = formatArticleComponent(questionTitle.textContent, articleComponent);
             const languageElement = await waitForElement('querySelector', '.selected-language');
 
-            const title = questionTitle.textContent.replaceAll(' ', '-').toLowerCase().trim();
-            const conentAdded = await addContentToGitHub(message.code, title, markdownContent, languageElement.textContent);
-            if (conentAdded.status === 201 || conentAdded.status === 200) {
-                const message = conentAdded.updated ? 'Successfully updated in GitHub' : 'Successfully added to GitHub';
-                showToast(message, '#007bff');
-            } else {
-                showToast('Failed to add to GitHub', '#e74c3c');
-            }
+            // Send data to background script for GitHub upload
+            chrome.runtime.sendMessage({
+                type: 'UPLOAD_TO_GITHUB',
+                code: message.code,
+                questionTitle: questionTitle.textContent,
+                markdownContent: markdownContent,
+                language: languageElement.textContent
+            });
         } catch (error) {
-            showToast('Failed to add to GitHub', '#e74c3c');
+            showToast('Failed to extract page data', '#e74c3c');
+        }
+    }
+    
+    // Handle result from background script
+    if (message.type === 'GITHUB_RESULT') {
+        if (message.success) {
+            const toastMessage = message.updated ? 'Successfully updated in GitHub' : 'Successfully added to GitHub';
+            showToast(toastMessage, '#007bff');
+        } else {
+            const errorMessage = message.error || 'Failed to add to GitHub';
+            showToast(errorMessage, '#e74c3c');
         }
     }
 });
